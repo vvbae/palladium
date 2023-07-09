@@ -1,6 +1,6 @@
-use super::token::Token;
+use super::compiler::Compiler;
 
-pub trait Visitor {
+pub trait Visitor<'a>: Sized {
     /// Visits each node in tree, examines it, and outputs the IASM code
-    fn visit_token<T: Token>(&self);
+    fn compile_token(&self, compiler: &mut Compiler);
 }

@@ -2,7 +2,7 @@ use nom::{branch::alt, bytes::complete::tag, error::context};
 
 use crate::parse::{Parse, ParseResult};
 
-use super::{token::Token, visitor::Visitor};
+use super::{compiler::Compiler, token::Token, visitor::Visitor};
 
 #[derive(Debug, PartialEq)]
 pub enum Operator {
@@ -47,9 +47,24 @@ impl Token for Operator {
     }
 }
 
-impl Visitor for Operator {
-    fn visit_token<T: Token>(&self) {
-        println!("{}", self.display_token())
+impl Visitor<'_> for Operator {
+    fn compile_token(&self, compiler: &mut Compiler) {
+        let result_reg = compiler.free_reg.pop().unwrap();
+        let right_reg = compiler.used_reg.pop().unwrap();
+        let left_reg = compiler.used_reg.pop().unwrap();
+
+        let op = match &self {
+            Operator::AddOp => "ADD",
+            Operator::SubOp => "SUB",
+            Operator::MultOp => "MUL",
+            Operator::DivOp => "DIV",
+        };
+
+        let line = format!("{} ${} ${} ${}", op, left_reg, right_reg, result_reg);
+        compiler.assembly.push(line);
+        compiler.used_reg.push(result_reg);
+        compiler.free_reg.push(right_reg);
+        compiler.free_reg.push(left_reg);
     }
 }
 
@@ -76,10 +91,10 @@ mod tests {
             Operator::MultOp,
             Operator::DivOp,
         ];
-        let (_, add) = parse_add("+").unwrap();
-        let (_, sub) = parse_sub("-").unwrap();
-        let (_, mul) = parse_mul("*").unwrap();
-        let (_, div) = parse_div("/").unwrap();
+        let (_, add) = Operator::parse("+").unwrap();
+        let (_, sub) = Operator::parse("-").unwrap();
+        let (_, mul) = Operator::parse("*").unwrap();
+        let (_, div) = Operator::parse("/").unwrap();
 
         assert_eq!(vec![add, sub, mul, div], expected);
     }
@@ -102,5 +117,33 @@ mod tests {
             ],
             expected
         );
+    }
+
+    #[test]
+    fn test_compile_add() {
+        let operator = Operator::AddOp;
+        let mut compiler = Compiler::new();
+        compiler.used_reg.push(1);
+        compiler.used_reg.push(2);
+        Operator::compile_token(&operator, &mut compiler);
+
+        assert_eq!(compiler.assembly.len(), 1);
+        assert_eq!(compiler.assembly[0], "ADD $1 $2 $0");
+        assert_eq!(compiler.free_reg.len(), 32);
+        assert_eq!(compiler.used_reg.len(), 1);
+    }
+
+    #[test]
+    fn test_compile_sub() {
+        let operator = Operator::SubOp;
+        let mut compiler = Compiler::new();
+        compiler.used_reg.push(1);
+        compiler.used_reg.push(2);
+        Operator::compile_token(&operator, &mut compiler);
+
+        assert_eq!(compiler.assembly.len(), 1);
+        assert_eq!(compiler.assembly[0], "SUB $1 $2 $0");
+        assert_eq!(compiler.free_reg.len(), 32);
+        assert_eq!(compiler.used_reg.len(), 1);
     }
 }
