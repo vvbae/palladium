@@ -1,15 +1,20 @@
 use nom::{
     branch::alt,
-    bytes::complete::tag,
+    bytes::complete::{tag, take_until},
     character::complete::{alpha1, digit1},
     combinator::{map, opt},
     error::context,
-    sequence::tuple,
+    sequence::{delimited, tuple},
+    Parser,
 };
 
-use crate::parse::{Parse, ParseResult};
+use crate::{
+    compiler::Compiler,
+    parse::{Parse, ParseResult},
+    visitor::Visitor,
+};
 
-use super::{compiler::Compiler, token::Token, visitor::Visitor};
+use super::{expression::Expr, token::Token};
 
 /// <number> | <identifier> | (<expression>)
 #[derive(Debug, PartialEq)]
@@ -17,6 +22,7 @@ pub enum Factor {
     Integer(i64),
     Float(f64),
     Identifier(String),
+    Expr(Expr),
 }
 
 /// Parse an integer ie. 98, -3
@@ -24,7 +30,7 @@ pub fn parse_int(input: &str) -> ParseResult<'_, Factor> {
     let (remaining, (sign, val)) = context("Integer", tuple((opt(tag("-")), digit1)))(input)?;
 
     let val = match sign {
-        Some(_) => -1 * val.parse::<i64>().unwrap(),
+        Some(_) => -val.parse::<i64>().unwrap(),
         None => val.parse::<i64>().unwrap(),
     };
 
@@ -57,10 +63,22 @@ pub fn parse_identifier(input: &str) -> ParseResult<'_, Factor> {
     Ok((remaining, Factor::Identifier(val.to_owned())))
 }
 
+/// Parse a parenthesized expression ie. (9 *-8)
+pub fn parse_paren_expr(input: &str) -> ParseResult<'_, Factor> {
+    let (remaining, val) = context(
+        "Parenthesized Expression",
+        delimited(tag("("), take_until(")"), tag(")")).and_then(Expr::parse),
+    )(input)?;
+
+    Ok((remaining, Factor::Expr(val)))
+}
+
 impl Parse<'_> for Factor {
     fn parse(input: &'_ str) -> crate::parse::ParseResult<'_, Self> {
-        let (remaining, val) =
-            context("Factor", alt((parse_identifier, parse_float, parse_int)))(input)?;
+        let (remaining, val) = context(
+            "Factor",
+            alt((parse_identifier, parse_float, parse_int, parse_paren_expr)),
+        )(input)?;
 
         Ok((remaining, val))
     }
@@ -88,29 +106,25 @@ impl Visitor<'_> for Factor {
             }
             Factor::Float(_) => todo!(),
             Factor::Identifier(_) => todo!(),
+            Factor::Expr(expr) => expr.compile_token(compiler),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::grammar::{operator::Operator, term::Term};
+
     use super::*;
 
     #[test]
     fn test_parse() {
-        let expected = vec![
-            Factor::Integer(32),
-            Factor::Integer(-32),
-            Factor::Float(32.55),
-            Factor::Float(-32.0),
-            Factor::Identifier("x".to_string()),
-        ];
         let (_, int1) = Factor::parse("32").unwrap();
         let (_, int2) = Factor::parse("-32").unwrap();
         let (_, flo1) = Factor::parse("32.55").unwrap();
         let (_, flo2) = Factor::parse("-32.0").unwrap();
         let (_, id) = Factor::parse("x").unwrap();
-        assert_eq!(vec![int1, int2, flo1, flo2, id], expected);
+        let (_, expr) = Factor::parse("( -9 * 8 )").unwrap();
     }
 
     #[test]

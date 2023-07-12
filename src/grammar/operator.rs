@@ -1,8 +1,12 @@
 use nom::{branch::alt, bytes::complete::tag, error::context};
 
-use crate::parse::{Parse, ParseResult};
+use crate::{
+    compiler::Compiler,
+    parse::{Parse, ParseResult},
+    visitor::Visitor,
+};
 
-use super::{compiler::Compiler, token::Token, visitor::Visitor};
+use super::token::Token;
 
 #[derive(Debug, PartialEq)]
 pub enum Operator {
@@ -39,10 +43,10 @@ pub fn parse_div(input: &str) -> ParseResult<'_, Operator> {
 impl Token for Operator {
     fn display_token(&self) -> String {
         match &self {
-            Operator::AddOp => format!("+"),
-            Operator::SubOp => format!("-"),
-            Operator::MultOp => format!("*"),
-            Operator::DivOp => format!("/"),
+            Operator::AddOp => "+".to_string(),
+            Operator::SubOp => "-".to_string(),
+            Operator::MultOp => "*".to_string(),
+            Operator::DivOp => "/".to_string(),
         }
     }
 }

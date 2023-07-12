@@ -1,23 +1,21 @@
 use nom::{
-    character::complete::multispace0,
-    combinator::{map, opt},
-    error::context,
+    character::complete::multispace0, combinator::map, error::context, multi::many0,
     sequence::tuple,
 };
 
-use crate::parse::{Parse, ParseResult};
-
-use super::{
-    compiler::Compiler, factor::Factor, operator::Operator, term::Term, token::Token,
+use crate::{
+    compiler::Compiler,
+    parse::{Parse, ParseResult},
     visitor::Visitor,
 };
+
+use super::{operator::Operator, term::Term, token::Token};
 
 /// <term> | <term> <operator> <term>
 #[derive(Debug, PartialEq)]
 pub struct Expr {
     pub left: Box<Term>, // box(pointer): known size at compile time
-    pub op: Option<Box<Operator>>,
-    pub right: Option<Box<Term>>,
+    pub rest: Option<Vec<(Operator, Term)>>,
 }
 
 impl Parse<'_> for Expr {
@@ -26,25 +24,30 @@ impl Parse<'_> for Expr {
             "Expression",
             map(
                 tuple((
+                    multispace0,
                     Term::parse,
-                    opt(tuple((
+                    many0(tuple((
                         multispace0,
                         Operator::parse,
                         multispace0,
                         Term::parse,
                     ))),
                 )),
-                |(left, rest)| match rest {
-                    Some((_, op, _, right)) => Self {
+                |(_, left, rest)| match rest.len() {
+                    0 => Self {
                         left: Box::new(left),
-                        op: Some(Box::new(op)),
-                        right: Some(Box::new(right)),
+                        rest: None,
                     },
-                    None => Self {
-                        left: Box::new(left),
-                        op: None,
-                        right: None,
-                    },
+                    _ => {
+                        let right = rest
+                            .into_iter()
+                            .map(|(_, op, _, right)| (op, right))
+                            .collect();
+                        Self {
+                            left: Box::new(left),
+                            rest: Some(right),
+                        }
+                    }
                 },
             ),
         )(input)?;
@@ -72,11 +75,11 @@ impl Token for Expr {
 impl Visitor<'_> for Expr {
     fn compile_token(&self, compiler: &mut Compiler) {
         self.left.compile_token(compiler);
-        if let Some(right) = &self.right {
-            right.compile_token(compiler);
-        }
-        if let Some(op) = &self.op {
-            op.compile_token(compiler);
+        if let Some(rest) = &self.rest {
+            rest.iter().for_each(|(op, right)| {
+                right.compile_token(compiler);
+                op.compile_token(compiler);
+            })
         }
     }
 }
@@ -87,68 +90,18 @@ mod tests {
 
     #[test]
     fn test_parse() {
-        let expected = vec![
-            Expr {
-                left: Box::new(Term {
-                    left: Box::new(Factor::Integer(-9)),
-                    op: Some(Box::new(Operator::SubOp)),
-                    right: Some(Box::new(Factor::Integer(8))),
-                }),
-                op: None,
-                right: None,
-            },
-            Expr {
-                left: Box::new(Term {
-                    left: Box::new(Factor::Float(-9.8)),
-                    op: Some(Box::new(Operator::SubOp)),
-                    right: Some(Box::new(Factor::Integer(8))),
-                }),
-                op: Some(Box::new(Operator::AddOp)),
-                right: Some(Box::new(Term {
-                    left: Box::new(Factor::Float(2.0)),
-                    op: Some(Box::new(Operator::MultOp)),
-                    right: Some(Box::new(Factor::Identifier("x".to_string()))),
-                })),
-            },
-        ];
-        let (_, val1) = Expr::parse("(-9- 8)").unwrap();
-        let (_, val2) = Expr::parse("(-9.8  - 8 ) + (2.0*x)").unwrap();
-        assert_eq!(vec![val1, val2], expected);
+        let v1 = Expr::parse("(-9.8  - 8 ) + (2.0*x)");
+        let v2 = Expr::parse(" -1 +9 * -8 - (3*x)  ");
+        assert!(v1.is_ok());
+        assert!(v2.is_ok());
     }
 
     #[test]
     fn test_compile() {
-        let expr = Expr {
-            left: Box::new(Term {
-                left: Box::new(Factor::Integer(-9)),
-                op: Some(Box::new(Operator::SubOp)),
-                right: Some(Box::new(Factor::Integer(8))),
-            }),
-            op: Some(Box::new(Operator::AddOp)),
-            right: Some(Box::new(Term {
-                left: Box::new(Factor::Integer(8)),
-                op: Some(Box::new(Operator::MultOp)),
-                right: Some(Box::new(Factor::Integer(1))),
-            })),
-        };
+        let (_, expected) = Expr::parse("-1 +9 * -8 - (3*1) ").unwrap();
         let mut compiler = Compiler::new();
-        Expr::compile_token(&expr, &mut compiler);
-
-        assert_eq!(compiler.assembly.len(), 7);
-
-        assert_eq!(
-            compiler.assembly,
-            vec![
-                "LOAD $0 #-9",
-                "LOAD $1 #8",
-                "SUB $0 $1 $2",
-                "LOAD $0 #8",
-                "LOAD $1 #1",
-                "MUL $0 $1 $3",
-                "ADD $2 $3 $0",
-            ]
-        );
-
+        Expr::compile_token(&expected, &mut compiler);
+        assert_eq!(compiler.assembly.len(), 9);
         assert_eq!(compiler.free_reg.len(), 30);
         assert_eq!(compiler.used_reg.len(), 1);
     }

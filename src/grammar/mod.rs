@@ -1,4 +1,3 @@
-mod compiler;
 mod conditional;
 mod expression;
 mod factor;
@@ -9,4 +8,3 @@ mod operator;
 mod program;
 mod term;
 mod token;
-mod visitor;

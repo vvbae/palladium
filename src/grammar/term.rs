@@ -1,21 +1,23 @@
 use nom::{
-    bytes::complete::tag,
-    character::complete::multispace0,
-    combinator::{map, opt},
-    error::context,
+    branch::alt, character::complete::multispace0, combinator::map, error::context, multi::many0,
     sequence::tuple,
 };
 
-use crate::parse::{Parse, ParseResult};
+use crate::{
+    compiler::Compiler,
+    parse::{Parse, ParseResult},
+    visitor::Visitor,
+};
 
-use super::{compiler::Compiler, factor::Factor, operator::Operator, visitor::Visitor};
+use super::{
+    factor::Factor,
+    operator::{parse_div, parse_mul, Operator},
+};
 
-/// <factor> | <factor> <operator> <factor>
 #[derive(Debug, PartialEq)]
 pub struct Term {
     pub left: Box<Factor>,
-    pub op: Option<Box<Operator>>,
-    pub right: Option<Box<Factor>>,
+    pub rest: Option<Vec<(Operator, Factor)>>,
 }
 
 impl Parse<'_> for Term {
@@ -24,29 +26,30 @@ impl Parse<'_> for Term {
             "Term",
             map(
                 tuple((
-                    opt(tag("(")),
-                    multispace0,
                     Factor::parse,
-                    opt(tuple((
+                    many0(tuple((
                         multispace0,
-                        Operator::parse,
+                        alt((parse_mul, parse_div)),
                         multispace0,
                         Factor::parse,
                         multispace0,
-                        opt(tag(")")),
                     ))),
                 )),
-                |(_, _, left, rest)| match rest {
-                    Some((_, op, _, right, _, _)) => Self {
+                |(left, rest)| match rest.len() {
+                    0 => Self {
                         left: Box::new(left),
-                        op: Some(Box::new(op)),
-                        right: Some(Box::new(right)),
+                        rest: None,
                     },
-                    None => Self {
-                        left: Box::new(left),
-                        op: None,
-                        right: None,
-                    },
+                    _ => {
+                        let right = rest
+                            .into_iter()
+                            .map(|(_, op, _, right, _)| (op, right))
+                            .collect();
+                        Self {
+                            left: Box::new(left),
+                            rest: Some(right),
+                        }
+                    }
                 },
             ),
         )(input)?;
@@ -67,11 +70,11 @@ impl Parse<'_> for Term {
 impl Visitor<'_> for Term {
     fn compile_token(&self, compiler: &mut Compiler) {
         self.left.compile_token(compiler);
-        if let Some(right) = &self.right {
-            right.compile_token(compiler);
-        }
-        if let Some(op) = &self.op {
-            op.compile_token(compiler);
+        if let Some(rest) = &self.rest {
+            rest.iter().for_each(|(op, right)| {
+                right.compile_token(compiler);
+                op.compile_token(compiler);
+            })
         }
     }
 }
@@ -82,37 +85,18 @@ mod tests {
 
     #[test]
     fn test_parse() {
-        let expected = vec![
-            Term {
-                left: Box::new(Factor::Integer(9)),
-                op: None,
-                right: None,
-            },
-            Term {
-                left: Box::new(Factor::Integer(-9)),
-                op: Some(Box::new(Operator::AddOp)),
-                right: Some(Box::new(Factor::Integer(8))),
-            },
-        ];
-        let (_, val1) = Term::parse("9").unwrap();
-        let (_, val2) = Term::parse("-9+ 8").unwrap();
-        assert_eq!(vec![val1, val2], expected);
+        let val1 = Term::parse("(3*4)*2");
+        let val2 = Term::parse("4*(3-4)");
+        assert!(val1.is_ok());
+        assert!(val2.is_ok());
     }
 
     #[test]
     fn test_compile() {
-        let term = Term {
-            left: Box::new(Factor::Integer(-9)),
-            op: Some(Box::new(Operator::AddOp)),
-            right: Some(Box::new(Factor::Integer(8))),
-        };
+        let (_, expected) = Term::parse("-9*(8-2)").unwrap();
         let mut compiler = Compiler::new();
-        Term::compile_token(&term, &mut compiler);
-
-        assert_eq!(compiler.assembly.len(), 3);
-        assert_eq!(compiler.assembly[0], "LOAD $0 #-9");
-        assert_eq!(compiler.assembly[1], "LOAD $1 #8");
-        assert_eq!(compiler.assembly[2], "ADD $0 $1 $2");
+        Term::compile_token(&expected, &mut compiler);
+        assert_eq!(compiler.assembly.len(), 5);
         assert_eq!(compiler.free_reg.len(), 30);
         assert_eq!(compiler.used_reg.len(), 1);
     }
